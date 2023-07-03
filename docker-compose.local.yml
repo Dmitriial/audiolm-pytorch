@@ -1,0 +1,19 @@
+services:
+  audiolm-env:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - .:/workspace
+      - ${WAV_DATA_PATH}:/data/input
+    tty: true
+    command: sleep infinity
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
