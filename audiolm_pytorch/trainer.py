@@ -193,11 +193,9 @@ class EarlyStopping:
 # main trainer class
 class BaseTrainer(nn.Module):
     def __init__(self,
-                 *_,
                  tb: Optional[str] = None,
                  es: Optional[int] = None,
-                 prt_std: bool = False
-                 **__):
+                 prt_std: bool = False):
         super().__init__()
 
         self._w = None
