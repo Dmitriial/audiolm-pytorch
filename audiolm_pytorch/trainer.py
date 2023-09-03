@@ -5,7 +5,7 @@ from random import choice
 from pathlib import Path
 from shutil import rmtree
 
-from beartype.typing import Union, List, Optional, Tuple
+from beartype.typing import Union, List, Optional, Tuple, Callable
 from typing_extensions import Annotated
 
 from beartype import beartype
@@ -16,6 +16,7 @@ import torch
 import torchaudio
 from torch import nn
 from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.tensorboard import SummaryWriter
 
 from einops import rearrange
 
@@ -134,9 +135,97 @@ def checkpoint_num_steps(checkpoint_path):
 
     return int(results[-1])
 
-# main trainer class
 
-class SoundStreamTrainer(nn.Module):
+class EarlyStopping:
+    """
+    Early stops the training if validation loss doesn't improve after a given patience.
+    """
+    def __init__(self, patience=7, verbose=False, delta=0,
+                 trace_func: Optional[Callable] = None,
+                 save_func: Optional[Callable] = None):
+        """
+        Args:
+            patience (int): How long to wait after last time validation loss improved.
+                            Default: 7
+            verbose (bool): If True, prints a message for each validation loss improvement.
+                            Default: False
+            delta (float): Minimum change in the monitored quantity to qualify as an improvement.
+                            Default: 0
+            path (str): Path for the checkpoint to be saved to.
+                            Default: 'checkpoint.pt'
+            trace_func (function): trace print function.
+                            Default: print
+        """
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.val_loss_min = np.Inf
+        self.delta = delta
+        self.path = path
+        self.trace_func = trace_func
+        self.save_func = save_func
+
+    def __call__(self, val_loss):
+        score = -val_loss
+        if self.best_score is None:
+            self.best_score = score
+            if self.save_func is not None:
+                self.save_func()
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            if self.trace_func is not None:
+                self.trace_func(f'EarlyStopping counter: {self.counter} out of {self.patience}')
+
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            if self.save_func is not None:
+                self.save_func()
+
+            self.counter = 0
+
+        return self.early_stop
+
+
+# main trainer class
+class BaseTrainer(nn.Module):
+    def __init__(self,
+                 tb: Optional[str] = None,
+                 es: Optional[int] = None,
+                 prt_std: bool = False
+                 *_, **__):
+        super().__init__()
+
+        self._w = None
+        if tb is not None:
+            self._w = SummaryWriter(log_dir=tb)
+
+        self._es = None
+        if es is not None:
+            self._es = EarlyStopping(patience=es)
+
+        self.prt_std = prt_std
+
+    def is_prt_std(self) -> bool:
+        return self.prt_std
+
+    def add_scalar(self, name: str, value: float, steps: int) -> None:
+        if self._w is None:
+            return
+
+        self._w.add_scalar(name, value, steps)
+
+    def check_early_stop(self, val_loss: float) -> None:
+        if self._es is not None:
+            early_stop = self._es(val_loss=val_loss)
+            if early_stop:
+                raise ValueError("EARLY STOP!")
+
+
+class SoundStreamTrainer(BaseTrainer):
     @beartype
     def __init__(
         self,
@@ -171,13 +260,15 @@ class SoundStreamTrainer(nn.Module):
         dataloader_drop_last = True,
         split_batches = False,
         use_lion: bool = False,
-        force_clear_prev_results: bool = None  # set to True | False to skip the prompt
+        force_clear_prev_results: bool = None,  # set to True | False to skip the prompt
+        tb: Optional[str] = None,
+        es: Optional[int] = False
     ):
         """
         Initialize with a SoundStream instance and either a folder containing audio data or
         train/val DataLoader instances.
         """
-        super().__init__()
+        super().__init__(tb=tb, es=es)
         check_one_trainer()
 
         if accelerator:
@@ -499,6 +590,15 @@ class SoundStreamTrainer(nn.Module):
                 "stft_discr_loss": logs['stft']
             }, step=steps)
 
+        self.add_scalar("SoundStreamTrainer/total_loss", logs['loss'], steps)
+        self.add_scalar("SoundStreamTrainer/recon_loss", logs['recon_loss'], steps)
+        self.add_scalar("SoundStreamTrainer/multi_spectral_recon_loss", logs['multi_spectral_recon_loss'], steps)
+        self.add_scalar("SoundStreamTrainer/adversarial_loss", logs['adversarial_loss'], steps)
+        self.add_scalar("SoundStreamTrainer/all_commitment_loss", logs['all_commitment_loss'], steps)
+        self.add_scalar("SoundStreamTrainer/stft_discr_loss", logs['stft'], steps)
+
+        self.check_early_stop(logs['loss'])
+
         for key, loss in logs.items():
             if not key.startswith('scale:'):
                 continue
@@ -509,8 +609,8 @@ class SoundStreamTrainer(nn.Module):
                 self.accelerator.log({f"discr_loss (scale {scale_factor})": loss}, step=steps)
 
         # log
-
-        self.print(losses_str)
+        if self.is_prt_std():
+            self.print(losses_str)
 
         # update exponential moving averaged generator
 
@@ -566,7 +666,7 @@ class SoundStreamTrainer(nn.Module):
 
 # semantic transformer trainer
 
-class SemanticTransformerTrainer(nn.Module):
+class SemanticTransformerTrainer(BaseTrainer):
     @beartype
     def __init__(
         self,
@@ -594,8 +694,10 @@ class SemanticTransformerTrainer(nn.Module):
         drop_last = False,
         force_clear_prev_results = None,
         average_valid_loss_over_grad_accum_every: bool = True, # if False, valid loss on a single batch
+        tb: Optional[str] = None,
+        es: Optional[EarlyStopping] = None,
     ):
-        super().__init__()
+        super().__init__(tb=tb, es=es)
         check_one_trainer()
 
         self.accelerator = Accelerator(
@@ -776,8 +878,10 @@ class SemanticTransformerTrainer(nn.Module):
         self.optim.zero_grad()
 
         # log
+        self.add_scalar("SemanticTransformerTrainer/train_loss", logs['loss'], steps)
+        if self.is_prt_std():
+            self.print(f"{steps}: loss: {logs['loss']}")
 
-        self.print(f"{steps}: loss: {logs['loss']}")
         self.accelerator.log({"train_loss": logs['loss']}, step=steps)
 
         # sample results every so often
@@ -792,10 +896,15 @@ class SemanticTransformerTrainer(nn.Module):
                 with torch.inference_mode():
                     self.train_wrapper.eval()
                     valid_loss += self.train_wrapper(**data_kwargs, return_loss = True)
-            valid_loss = valid_loss.clone() # avoid inference mode to non-inference mode error
+            valid_loss = valid_loss.clone()  # avoid inference mode to non-inference mode error
             valid_loss /= self.average_valid_loss_over_grad_accum_every
-            self.print(f'{steps}: valid loss {valid_loss}')
+
+            self.add_scalar("SemanticTransformerTrainer/valid_loss", valid_loss, steps)
+            if self.is_prt_std():
+                self.print(f'{steps}: valid loss {valid_loss}')
+
             self.accelerator.log({"valid_loss": valid_loss}, step=steps)
+            self.check_early_stop(val_loss=valid_loss)
 
         # save model every so often
 
@@ -818,7 +927,7 @@ class SemanticTransformerTrainer(nn.Module):
 
 # fine transformer trainer
 
-class CoarseTransformerTrainer(nn.Module):
+class CoarseTransformerTrainer(BaseTrainer):
     @beartype
     def __init__(
         self,
@@ -848,8 +957,10 @@ class CoarseTransformerTrainer(nn.Module):
         drop_last = False,
         force_clear_prev_results = None,
         average_valid_loss_over_grad_accum_every: bool = True,  # if False, valid loss on a single batch
+        tb: Optional[str] = None,
+        es: Optional[EarlyStopping] = None
     ):
-        super().__init__()
+        super().__init__(tb=tb, es=es)
         check_one_trainer()
 
         self.accelerator = Accelerator(
@@ -1034,8 +1145,10 @@ class CoarseTransformerTrainer(nn.Module):
         self.optim.zero_grad()
 
         # log
+        self.add_scalar("CoarseTransformerTrainer/train_loss", logs['loss'], steps)
+        if self.is_prt_std():
+            self.print(f"{steps}: loss: {logs['loss']}")
 
-        self.print(f"{steps}: loss: {logs['loss']}")
         self.accelerator.log({"train_loss": logs['loss']}, step=steps)
 
         # sample results every so often
@@ -1056,7 +1169,11 @@ class CoarseTransformerTrainer(nn.Module):
                     )
             valid_loss = valid_loss.clone() # avoid inference mode to non-inference mode error
             valid_loss /= self.average_valid_loss_over_grad_accum_every
-            self.print(f'{steps}: valid loss {valid_loss}')
+            self.add_scalar("CoarseTransformerTrainer/valid_loss", valid_loss, steps)
+            if self.is_prt_std():
+                self.print(f'{steps}: valid loss {valid_loss}')
+            self.check_early_stop(val_loss=valid_loss)
+
             self.accelerator.log({"valid_loss": valid_loss}, step=steps)
 
         # save model every so often
@@ -1080,7 +1197,7 @@ class CoarseTransformerTrainer(nn.Module):
 
 # fine transformer trainer
 
-class FineTransformerTrainer(nn.Module):
+class FineTransformerTrainer(BaseTrainer):
     @beartype
     def __init__(
         self,
@@ -1109,8 +1226,10 @@ class FineTransformerTrainer(nn.Module):
         drop_last = False,
         force_clear_prev_results = None,
         average_valid_loss_over_grad_accum_every: bool = True, # if False, valid loss on a single batch
+        tb: Optional[str] = None,
+        es: Optional[EarlyStopping] = None,
     ):
-        super().__init__()
+        super().__init__(tb=tb, es=es)
         check_one_trainer()
 
         self.accelerator = Accelerator(
@@ -1292,8 +1411,10 @@ class FineTransformerTrainer(nn.Module):
         self.optim.zero_grad()
 
         # log
+        self.add_scalar("FineTransformerTrainer/train_loss", logs['loss'], steps)
+        if self.is_prt_std():
+            self.print(f"{steps}: loss: {logs['loss']}")
 
-        self.print(f"{steps}: loss: {logs['loss']}")
         self.accelerator.log({"train_loss": logs['loss']}, step=steps)
 
         # sample results every so often
@@ -1310,7 +1431,10 @@ class FineTransformerTrainer(nn.Module):
                     valid_loss += self.train_wrapper(**data_kwargs, return_loss = True)
             valid_loss = valid_loss.clone() # avoid inference mode to non-inference mode error
             valid_loss /= self.average_valid_loss_over_grad_accum_every
-            self.print(f'{steps}: valid loss {valid_loss}')
+            self.add_scalar("FineTransformerTrainer/valid_loss", valid_loss, steps)
+            if self.is_prt_std():
+                self.print(f'{steps}: valid loss {valid_loss}')
+            self.check_early_stop(val_loss=valid_loss)
             self.accelerator.log({"valid_loss": valid_loss}, step=steps)
 
         # save model every so often
