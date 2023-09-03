@@ -694,7 +694,7 @@ class SemanticTransformerTrainer(BaseTrainer):
         force_clear_prev_results = None,
         average_valid_loss_over_grad_accum_every: bool = True, # if False, valid loss on a single batch
         tb: Optional[str] = None,
-        es: Optional[EarlyStopping] = None,
+        es: Optional[int] = None,
     ):
         super().__init__(tb=tb, es=es)
         check_one_trainer()
@@ -957,7 +957,7 @@ class CoarseTransformerTrainer(BaseTrainer):
         force_clear_prev_results = None,
         average_valid_loss_over_grad_accum_every: bool = True,  # if False, valid loss on a single batch
         tb: Optional[str] = None,
-        es: Optional[EarlyStopping] = None
+        es: Optional[int] = None
     ):
         super().__init__(tb=tb, es=es)
         check_one_trainer()
@@ -1226,7 +1226,7 @@ class FineTransformerTrainer(BaseTrainer):
         force_clear_prev_results = None,
         average_valid_loss_over_grad_accum_every: bool = True, # if False, valid loss on a single batch
         tb: Optional[str] = None,
-        es: Optional[EarlyStopping] = None,
+        es: Optional[int] = None,
     ):
         super().__init__(tb=tb, es=es)
         check_one_trainer()
