@@ -972,9 +972,15 @@ class CoarseTransformerTrainer(BaseTrainer):
         force_clear_prev_results = None,
         average_valid_loss_over_grad_accum_every: bool = True,  # if False, valid loss on a single batch
         tb: Optional[str] = None,
-        es: Optional[int] = None
+        es: Optional[int] = None,
+        save_best: bool = False
     ):
-        super().__init__(tb=tb, es=es)
+        save_fn = None
+        if save_best:
+            save_fn = lambda: self.save(
+                str(self.results_folder / f'coarse.transformer.best.pt')
+            )
+        super().__init__(tb=tb, es=es, save_func=save_fn)
         check_one_trainer()
 
         self.accelerator = Accelerator(
@@ -1239,11 +1245,18 @@ class FineTransformerTrainer(BaseTrainer):
         split_batches = False,
         drop_last = False,
         force_clear_prev_results = None,
-        average_valid_loss_over_grad_accum_every: bool = True, # if False, valid loss on a single batch
+        average_valid_loss_over_grad_accum_every: bool = True,  # if False, valid loss on a single batch
         tb: Optional[str] = None,
         es: Optional[int] = None,
+        save_best: bool = False
     ):
-        super().__init__(tb=tb, es=es)
+        save_fn = None
+        if save_best:
+            save_fn = lambda: self.save(
+                str(self.results_folder / f'fine.transformer.best.pt')
+            )
+
+        super().__init__(tb=tb, es=es, save_func=save_fn)
         check_one_trainer()
 
         self.accelerator = Accelerator(
