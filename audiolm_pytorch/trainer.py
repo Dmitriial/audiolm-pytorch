@@ -164,7 +164,6 @@ class EarlyStopping:
         self.early_stop = False
         self.val_loss_min = np.Inf
         self.delta = delta
-        self.path = path
         self.trace_func = trace_func
         self.save_func = save_func
 
