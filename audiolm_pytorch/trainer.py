@@ -1,4 +1,5 @@
 import re
+import numpy as np
 from math import sqrt
 import copy
 from random import choice
