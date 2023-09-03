@@ -263,7 +263,7 @@ class SoundStreamTrainer(BaseTrainer):
         force_clear_prev_results: bool = None,  # set to True | False to skip the prompt
         tb: Optional[str] = None,
         es: Optional[int] = False,
-        save_best: boole = False
+        save_best: bool = False
     ):
         """
         Initialize with a SoundStream instance and either a folder containing audio data or
