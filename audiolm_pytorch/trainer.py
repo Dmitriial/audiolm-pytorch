@@ -195,6 +195,7 @@ class BaseTrainer(nn.Module):
     def __init__(self,
                  tb: Optional[str] = None,
                  es: Optional[int] = None,
+                 save_func: Optional[Callable] = None,
                  prt_std: bool = False):
         super().__init__()
 
@@ -204,7 +205,7 @@ class BaseTrainer(nn.Module):
 
         self._es = None
         if es is not None:
-            self._es = EarlyStopping(patience=es)
+            self._es = EarlyStopping(patience=es, save_func=save_func)
 
         self.prt_std = prt_std
 
@@ -261,13 +262,20 @@ class SoundStreamTrainer(BaseTrainer):
         use_lion: bool = False,
         force_clear_prev_results: bool = None,  # set to True | False to skip the prompt
         tb: Optional[str] = None,
-        es: Optional[int] = False
+        es: Optional[int] = False,
+        save_best: boole = False
     ):
         """
         Initialize with a SoundStream instance and either a folder containing audio data or
         train/val DataLoader instances.
         """
-        super().__init__(tb=tb, es=es)
+        save_fn = None
+        if save_best:
+            save_fn = lambda: self.save(
+                str(self.results_folder / f'soundstream.best.pt')
+            )
+
+        super().__init__(tb=tb, es=es, save_func=save_fn)
         check_one_trainer()
 
         if accelerator:
